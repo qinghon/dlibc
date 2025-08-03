@@ -1,0 +1,29 @@
+
+[package]
+name = "dlibc"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Dynamic libc bindings generated at compile time"
+build = "build/build.rs"
+
+[dependencies]
+
+[build-dependencies]
+#bindgen = { version = "0.72", features = ["experimental"] }
+bindgen = {git = "https://github.com/qinghon/rust-bindgen.git", branch = "split_to_file", features = ["experimental"]}
+clang-sys = "1.8"
+compact_str = "0.9"
+petgraph = { version = "0.8" }
+prettyplease = "0.2"
+proc-macro2 = {version = "1"}
+quote = { version = "1", default-features = false }
+rayon = "1.10"
+syn = { version = "2", features = ["full", "visit", "derive", "extra-traits"] }
+
+[lib]
+name = "dlibc"
+path = "lib.rs"
+
+[features]
+

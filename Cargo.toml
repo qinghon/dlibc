@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "dlibc"
+]
+default-members = [
+    "dlibc"
+]
+[workspace.package]
+rust-version = "1.85.0"
+edition = "2024"
+
+
+
+[workspace.metadata.release]
+shared-version = true # ensures published packages share the same version
+tag-name = "v{{version}}"
+# Don't release any crate unless its manifest has `release = true`
+release = false
+
+[profile.dev.build-override]
+debug = true
+opt-level = 3
