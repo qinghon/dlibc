@@ -3,7 +3,7 @@ use compact_str::{CompactString, ToCompactString};
 use petgraph::Graph;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, TokenStream};
 use quote::{quote, ToTokens};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -65,7 +65,10 @@ impl Visit<'_> for ModSym {
 		match node {
 			Type::Path(type_path) => {
 				if let Some(ident) = type_path.path.get_ident() {
-					self.used.get_or_insert(ident.to_compact_string());
+					let ident = ident.to_compact_string();
+					if ! self.used.contains(&ident) {
+						self.used.insert(ident);
+					}
 				}
 			}
 			_ => {}
@@ -178,7 +181,7 @@ impl Modtree {
 		path_to_node.insert("/".to_string(), root_index);
 		let mut current_path = String::new();
 		for header_ in headers {
-			let header = path_to_mod_path(header_.trim_end_matches(".h").as_str());
+			let header = path_to_mod_path(header_.trim_end_matches(".h").as_ref());
 			let parts: Vec<&str> = header.split('/').filter(|s| !s.is_empty()).collect();
 			let mut parent = root_index;
 			current_path.clear();
@@ -304,9 +307,16 @@ impl Includes {
 			return;
 		}
 		let tokens = mem::replace(global_mod.borrow_mut().tokens.as_mut(), Vec::with_capacity(1));
-		let token: TokenStream = tokens.into_iter().collect();
-		let new = dedup_bindings(&token);
+		let new = dedup_bindings(&tokens);
 		global_mod.borrow_mut().tokens.push(new);
+
+
+		for m in self.mod_map.values() {
+			let tokens = mem::replace(m.borrow_mut().tokens.as_mut(), Vec::with_capacity(1));
+			let new = dedup_bindings(&tokens);
+			m.borrow_mut().tokens.push(new);
+		}
+
 	}
 
 	pub fn parse_mod_sym(&mut self) {
@@ -347,7 +357,7 @@ impl Includes {
 		}
 		// 头文件依赖
 		for header in self.mod_map.values() {
-			let header_node = header_node_map.get(header.borrow().name.as_str()).unwrap();
+			let header_node = header_node_map.get(header.borrow().name.as_ref()).unwrap();
 			for (idx, inc) in header.borrow().includes.iter().enumerate() {
 				let hn_inc = header_node_map.get(inc).unwrap();
 				graph.add_edge(*header_node, *hn_inc, Edge::Include { order: (idx + 1) as u32 });
@@ -397,7 +407,7 @@ impl Includes {
 					continue;
 				}
 
-				let tree_facade_node = match self.tree_graph.get_leaf_node(header_name.as_str()) {
+				let tree_facade_node = match self.tree_graph.get_leaf_node(header_name.as_ref()) {
 					Some(node) => node,
 					None => continue,
 				};
@@ -414,7 +424,7 @@ impl Includes {
 							continue;
 						}
 					};
-					let tree_node = match self.tree_graph.get_leaf_node(symbol_header.as_str()) {
+					let tree_node = match self.tree_graph.get_leaf_node(symbol_header.as_ref()) {
 						Some(node) => node,
 						None => continue,
 					};
@@ -624,7 +634,7 @@ pub(crate) fn parse_header_expand(clang: &Clang, header_content: &str) -> io::Re
 	let linereader = BufReader::new(preprocessed);
 
 	let mut header_expand = String::with_capacity(4096);
-	header_expand.push_str(header_content.as_str());
+	header_expand.push_str(&header_content);
 	for line in linereader.lines() {
 		let line = line?;
 
@@ -714,30 +724,52 @@ pub(crate) fn parse_header_modtree(header_expand: &str, includes: &mut Includes)
 	Ok(())
 }
 
+#[derive(Clone, Default)]
 struct BindingCollector {
 	pub duplicates: HashSet<Item>,
+	pub dup_const: HashMap<Ident, Item>
+}
+impl BindingCollector {
+	pub fn to_token_stream(&self) -> TokenStream {
+		let mut out = TokenStream::new();
+
+		for (_, macros) in &self.dup_const {
+			out.extend(macros.to_token_stream());
+		}
+		out.extend(self.duplicates.iter().map(|item| {item.to_token_stream()}));
+
+		out
+	}
 }
 
 impl<'ast> Visit<'ast> for BindingCollector {
 	fn visit_item(&mut self, item: &'ast Item) {
-		self.duplicates.get_or_insert(item.clone());
 
+		match item {
+			Item::Const(v) => {
+				// 解决在通过不同入口运行bindgen 时, 头文件对同一个宏定义了不同的值
+				// 这里使用最后定义的值, 获取有更好的解决方式
+				self.dup_const.insert(v.ident.clone(), item.clone());
+			}
+			_ => {
+				if ! self.duplicates.contains(&item) {
+					self.duplicates.insert(item.clone());
+				}
+			}
+		}
 		syn::visit::visit_item(self, item);
 	}
 }
 
-pub fn dedup_bindings(input: &TokenStream) -> TokenStream {
-	let mut collector = BindingCollector { duplicates: HashSet::new() };
+pub fn dedup_bindings(input: &[TokenStream]) -> TokenStream {
+	let mut collector = BindingCollector::default();
 
-	syn::visit::visit_file(&mut collector, &syn::parse_quote!(#input));
-
-	let mut output = quote! {};
+	for token in input {
+		syn::visit::visit_file(&mut collector, &syn::parse_quote!(#token));
+	}
 
 	// 添加所有非重复项
-	for item in collector.duplicates.iter() {
-		output.extend(item.to_token_stream());
-	}
-	output
+	collector.to_token_stream()
 }
 
 
@@ -788,7 +820,7 @@ fn path_to_mod(path: &str) -> String {
 		if sep.starts_with(|x: char| x.is_numeric()) {
 			s.push_str("_");
 		}
-		s.push_str(rust_mangle(sep).as_str())
+		s.push_str(rust_mangle(sep).as_ref())
 	}
 	s
 }
@@ -801,7 +833,7 @@ fn path_to_mod_path(path: &str) -> String {
 		if sep.starts_with(|x: char| x.is_numeric()) {
 			s.push_str("_");
 		}
-		s.push_str(rust_mangle(sep).as_str())
+		s.push_str(rust_mangle(sep).as_ref())
 	}
 
 	s
@@ -823,7 +855,7 @@ fn dump_sub_mod(root: &Includes, base_path: &PathBuf) -> io::Result<()> {
 						Node::Header(header) => header,
 						_ => continue,
 					};
-					let mod_path = root.tree_graph.get_safe_mod_name(target_name.as_str());
+					let mod_path = root.tree_graph.get_safe_mod_name(target_name.as_ref());
 					let path: syn::Path = syn::parse_str(&format!("crate{}", mod_path)).unwrap();
 					tokens.push(quote! {
 						pub use #path::*;
@@ -970,7 +1002,7 @@ fn dump_top_generate(includes: &Includes, base_path: &PathBuf, clang: &Clang) ->
 			continue;
 		}
 		let mod_path = path_to_mod(path);
-		generate_data.push_str("\n#[allow(ambiguous_glob_reexports)]");
+		generate_data.push_str("\n#[allow(ambiguous_glob_reexports, unused_imports)]");
 		generate_data.push_str(&format!("\npub use crate{}::*;\n", mod_path));
 	}
 	let mut f = File::create(&dest_path)?;

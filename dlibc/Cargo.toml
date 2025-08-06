@@ -14,7 +14,7 @@ build = "build/build.rs"
 bindgen = {git = "https://github.com/qinghon/rust-bindgen.git", branch = "split_to_file", features = ["experimental"]}
 clang-sys = "1.8"
 compact_str = "0.9"
-petgraph = { version = "0.8" }
+petgraph = { version = "0.8", default-features = false, features = ["std"]}
 prettyplease = "0.2"
 proc-macro2 = {version = "1"}
 quote = { version = "1", default-features = false }

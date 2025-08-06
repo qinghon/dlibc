@@ -1,5 +1,3 @@
-#![feature(str_as_str)]
-#![feature(hash_set_entry)]
 
 mod modtree;
 mod target_env;
@@ -162,14 +160,12 @@ fn main() {
 		for (path, token_string) in binding {
 			if let Some(cur_mod) = root.mod_map.get(path.as_str()) {
 				// 跳过已解析头文件符号,
-				if cur_mod.borrow().tokens.is_empty() && !token_string.is_empty() {
-					let tokens = syn::parse_str::<proc_macro2::TokenStream>(&token_string).unwrap();
-					cur_mod.borrow_mut().tokens.push(tokens.clone())
+				if token_string.is_empty() {
+					continue;
 				}
-				if path == "" && !token_string.is_empty() {
-					let tokens = syn::parse_str::<proc_macro2::TokenStream>(&token_string).unwrap();
-					cur_mod.borrow_mut().tokens.push(tokens.clone())
-				}
+
+				let tokens = syn::parse_str::<proc_macro2::TokenStream>(&token_string).unwrap();
+				cur_mod.borrow_mut().tokens.push(tokens.clone())
 			}
 		}
 	}
